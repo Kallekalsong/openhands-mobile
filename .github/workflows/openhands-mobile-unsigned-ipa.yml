@@ -1,0 +1,84 @@
+name: Build unsigned OpenHands Mobile IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install --non-interactive
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install
+
+      - name: Find workspace and scheme
+        id: xcode
+        shell: bash
+        run: |
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "No Xcode workspace was generated." >&2
+            exit 1
+          fi
+          LIST="$(xcodebuild -list -json -workspace "$WORKSPACE")"
+          SCHEME="$(python3 -c 'import json,sys; d=json.load(sys.stdin); s=d["workspace"]["schemes"]; print(next((x for x in s if x.lower() not in ("pods",)), s[0] if s else ""))' <<< "$LIST")"
+          if [ -z "$SCHEME" ]; then
+            echo "No Xcode scheme was found." >&2
+            exit 1
+          fi
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Using workspace: $WORKSPACE"
+          echo "Using scheme: $SCHEME"
+
+      - name: Build unsigned iOS app
+        run: |
+          xcodebuild \
+            -workspace "${{ steps.xcode.outputs.workspace }}" \
+            -scheme "${{ steps.xcode.outputs.scheme }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          APP_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Build finished but no .app was found." >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/OpenHandsMobile-unsigned.ipa" Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenHandsMobile-unsigned-IPA
+          path: OpenHandsMobile-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
