@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build iOS IPA (unsigned for SideStore)
 
 on:
   workflow_dispatch:
@@ -22,37 +22,76 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install EAS CLI
-        run: npm install -g eas-cli
-
-      - name: Login to Expo
-        run: eas login --non-interactive
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: Install npm dependencies
+        run: npm ci
 
       - name: Generate native iOS project
         run: npx expo prebuild -p ios --no-install --non-interactive
 
-      - name: Build iOS IPA (development, EAS cloud)
-        id: build
-        run: |
-          eas build --platform ios --profile development --non-interactive --wait
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: Install CocoaPods
+        run: cd ios && pod install
 
-      - name: Display EAS build info
+      - name: Build unsigned iOS app with Xcode (Release)
         run: |
-          echo "============================================"
-          echo "iOS build completed on EAS cloud servers."
-          echo "============================================"
-          echo ""
-          echo "Download the signed IPA from the EAS dashboard:"
-          echo "  https://expo.dev/accounts/${{ secrets.EXPO_USERNAME }}/projects/openhands-mobile/builds"
-          echo ""
-          echo "Recent builds:"
-          eas build:list --platform ios --limit 5 2>&1 || true
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/OpenHands.xcworkspace \
+            -scheme OpenHands \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath ios/build/OpenHands.xcarchive \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE="" \
+            archive
+
+      - name: Verify built .app bundle
+        run: |
+          set -euo pipefail
+          APP_PATH="ios/build/OpenHands.xcarchive/Products/Applications/OpenHands.app"
+          echo "App bundle path: $APP_PATH"
+          test -d "$APP_PATH" || { echo "ERROR: App bundle not found"; exit 1; }
+          echo "Bundle identifier:"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
+          echo "Executable:"
+          ls "$APP_PATH/OpenHands" 2>/dev/null || ls "$APP_PATH"/* | head -5
+          echo "JS bundle present:"
+          test -f "$APP_PATH/main.jsbundle" && echo "  YES: main.jsbundle" || echo "  NO main.jsbundle"
+
+      - name: Package unsigned .ipa
+        run: |
+          set -euo pipefail
+          APP_PATH="ios/build/OpenHands.xcarchive/Products/Applications/OpenHands.app"
+          IPA_DIR="ios/build/Payload"
+          rm -rf ios/build/Payload ios/build/OpenHands.ipa
+          mkdir -p "$IPA_DIR"
+          cp -R "$APP_PATH" "$IPA_DIR/"
+          cd ios/build
+          zip -r OpenHands.ipa Payload/
+          echo "IPA created at ios/build/OpenHands.ipa"
+
+      - name: Verify IPA structure
+        run: |
+          set -euo pipefail
+          IPA="ios/build/OpenHands.ipa"
+          test -f "$IPA" || { echo "ERROR: IPA not found"; exit 1; }
+          echo "IPA file size:"
+          ls -lh "$IPA"
+          echo "IPA contents:"
+          unzip -l "$IPA"
+          echo "Verifying Payload/OpenHands.app..."
+          unzip -o -q "$IPA" -d /tmp/ipa_verify
+          test -d "/tmp/ipa_verify/Payload/OpenHands.app" || { echo "ERROR: Payload/OpenHands.app missing"; exit 1; }
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "/tmp/ipa_verify/Payload/OpenHands.app/Info.plist")
+          echo "Bundle identifier in IPA: $BUNDLE_ID"
+          test "$BUNDLE_ID" = "dev.openhands.mobile" || { echo "ERROR: Unexpected bundle identifier"; exit 1; }
+          rm -rf /tmp/ipa_verify
+          echo "IPA verification passed."
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openhands-unsigned-ios-ipa
+          path: ios/build/OpenHands.ipa
+          retention-days: 30
