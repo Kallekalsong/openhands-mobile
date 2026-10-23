@@ -41,7 +41,7 @@ jobs:
             -sdk iphoneos \
             -archivePath ios/build/OpenHands.xcarchive \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE="" \
             archive
@@ -57,7 +57,7 @@ jobs:
           echo "Executable:"
           ls "$APP_PATH/OpenHands" 2>/dev/null || ls "$APP_PATH"/* | head -5
           echo "JS bundle present:"
-          test -f "$APP_PATH/main.jsbundle" && echo "  YES: main.jsbundle" || echo "  NO main.jsbundle"
+          test -f "$APP_PATH/main.jsbundle" || { echo "ERROR: main.jsbundle missing from Release build"; exit 1; }
 
       - name: Package unsigned .ipa
         run: |
