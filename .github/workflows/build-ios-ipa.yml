@@ -3,10 +3,10 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
   push:
-    branches: [ ios-build ]
+    branches: [ ios-ipa-build ]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-ios:
@@ -28,22 +28,31 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: Generate native iOS project
-        run: npx expo prebuild -p ios --no-install --non-interactive
-
-      - name: Build iOS IPA (development, local)
-        run: eas build --platform ios --profile development --non-interactive --local
+      - name: Login to Expo
+        run: eas login --non-interactive
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Locate IPA
-        run: find ios/build -name "*.ipa" -type f 2>/dev/null || echo "No IPA found in ios/build"
+      - name: Generate native iOS project
+        run: npx expo prebuild -p ios --no-install --non-interactive
 
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: openhands-ios-ipa
-          path: |
-            ios/build/*.ipa
-          retention-days: 30
-        if: always()
+      - name: Build iOS IPA (development, EAS cloud)
+        id: build
+        run: |
+          eas build --platform ios --profile development --non-interactive --wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Display EAS build info
+        run: |
+          echo "============================================"
+          echo "iOS build completed on EAS cloud servers."
+          echo "============================================"
+          echo ""
+          echo "Download the signed IPA from the EAS dashboard:"
+          echo "  https://expo.dev/accounts/${{ secrets.EXPO_USERNAME }}/projects/openhands-mobile/builds"
+          echo ""
+          echo "Recent builds:"
+          eas build:list --platform ios --limit 5 2>&1 || true
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
